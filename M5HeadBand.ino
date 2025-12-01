@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 6  // Increment with each upload
+#define BUILD 7  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -929,11 +929,17 @@ void handleButtons() {
 // ---------------------------------------------------------------------------
 
 void setup() {
-  Serial.begin(115200);
-
   // Initialize M5 with config (like m5lights_v1)
   auto cfg = M5.config();
   M5.begin(cfg);
+
+  // Initialize display
+  M5.Lcd.setRotation(1);
+  M5.Lcd.fillScreen(TFT_BLACK);
+
+  // Initialize serial with delay (like m5lights_v1)
+  Serial.begin(115200);
+  delay(1000);
 
   Serial.println("================================");
   Serial.print("M5HeadBand v"); Serial.print(VERSION);
@@ -941,7 +947,23 @@ void setup() {
   Serial.println("Initializing...");
   Serial.println("================================");
 
-  // Initialize FastLED
+  // Initialize watchdog (ESP32 v3.x API)
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 30000,
+    .idle_core_mask = 0,
+    .trigger_panic = true
+  };
+  esp_task_wdt_init(&wdt_config);
+  esp_task_wdt_add(NULL);
+
+  // Initialize audio BEFORE FastLED (critical!)
+  initAudio();
+  lastBrightnessUpdate = millis();
+
+  // Initialize ESP-NOW
+  setupESPNOW();
+
+  // Initialize FastLED (after audio)
   FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
     .setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
@@ -953,26 +975,7 @@ void setup() {
   memset(imgData, 0, sizeof(imgData));
   fxVars[backImgIdx][0] = 1;  // Mark back image as initialized
 
-  // Initialize audio
-  initAudio();
-  lastBrightnessUpdate = millis();
-
-  // Initialize ESP-NOW
-  setupESPNOW();
-
-  // Initialize display
-  M5.Lcd.setRotation(1);
-  M5.Lcd.fillScreen(TFT_BLACK);
   updateDisplay();
-
-  // Initialize watchdog (ESP32 v3.x API)
-  esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 30000,
-    .idle_core_mask = 0,
-    .trigger_panic = true
-  };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
 
   Serial.println("M5HeadBand Ready!");
 }
