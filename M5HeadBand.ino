@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 5  // Increment with each upload
+#define BUILD 6  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -930,7 +930,10 @@ void handleButtons() {
 
 void setup() {
   Serial.begin(115200);
-  M5.begin();
+
+  // Initialize M5 with config (like m5lights_v1)
+  auto cfg = M5.config();
+  M5.begin(cfg);
 
   Serial.println("================================");
   Serial.print("M5HeadBand v"); Serial.print(VERSION);
