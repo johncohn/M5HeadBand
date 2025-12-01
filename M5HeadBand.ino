@@ -35,6 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
+#define BUILD 4  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -504,6 +505,11 @@ void updatePatterns() {
 void initAudio() {
   // Configure microphone with high gain for better sensitivity
   auto mic_cfg = M5.Mic.config();
+
+  Serial.println("=== Microphone Configuration ===");
+  Serial.print("Before - Magnification: "); Serial.println(mic_cfg.magnification);
+  Serial.print("Before - Sample rate: "); Serial.println(mic_cfg.sample_rate);
+
   mic_cfg.sample_rate = MIC_SR;
   mic_cfg.magnification = 16;  // Increase gain for better sensitivity
   mic_cfg.noise_filter_level = 0;
@@ -512,8 +518,13 @@ void initAudio() {
 
   M5.Mic.begin();
 
+  // Read back config to verify it was applied
+  auto verify_cfg = M5.Mic.config();
+  Serial.print("After - Magnification: "); Serial.println(verify_cfg.magnification);
+  Serial.print("After - Sample rate: "); Serial.println(verify_cfg.sample_rate);
+  Serial.println("================================");
+
   lastBpmMillis = millis();
-  Serial.println("Audio initialized with gain=16");
 }
 
 void detectAudioFrame() {
@@ -841,7 +852,7 @@ void updateDisplay() {
   M5.Lcd.setTextColor(TFT_WHITE, bgColor);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("M5HeadBand v%s", VERSION);
+  M5.Lcd.printf("M5HeadBand v%s.%d", VERSION, BUILD);
 
   M5.Lcd.setCursor(10, 35);
   M5.Lcd.print("Mode: ");
@@ -911,7 +922,11 @@ void setup() {
   Serial.begin(115200);
   M5.begin();
 
-  Serial.println("M5HeadBand Initializing...");
+  Serial.println("================================");
+  Serial.print("M5HeadBand v"); Serial.print(VERSION);
+  Serial.print(" Build "); Serial.println(BUILD);
+  Serial.println("Initializing...");
+  Serial.println("================================");
 
   // Initialize FastLED
   FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
