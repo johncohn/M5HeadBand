@@ -502,10 +502,18 @@ void updatePatterns() {
 // ---------------------------------------------------------------------------
 
 void initAudio() {
+  // Configure microphone with high gain for better sensitivity
+  auto mic_cfg = M5.Mic.config();
+  mic_cfg.sample_rate = MIC_SR;
+  mic_cfg.magnification = 16;  // Increase gain for better sensitivity
+  mic_cfg.noise_filter_level = 0;
+  mic_cfg.use_adc = false;
+  M5.Mic.config(mic_cfg);
+
   M5.Mic.begin();
-  M5.Mic.setSampleRate(MIC_SR);
+
   lastBpmMillis = millis();
-  Serial.println("Audio initialized");
+  Serial.println("Audio initialized with gain=16");
 }
 
 void detectAudioFrame() {
