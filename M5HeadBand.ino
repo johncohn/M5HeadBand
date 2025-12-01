@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 7  // Increment with each upload
+#define BUILD 8  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -503,28 +503,11 @@ void updatePatterns() {
 // ---------------------------------------------------------------------------
 
 void initAudio() {
-  // Configure microphone with high gain for better sensitivity
-  auto mic_cfg = M5.Mic.config();
-
-  Serial.println("=== Microphone Configuration ===");
-  Serial.print("Before - Magnification: "); Serial.println(mic_cfg.magnification);
-  Serial.print("Before - Sample rate: "); Serial.println(mic_cfg.sample_rate);
-
-  mic_cfg.sample_rate = MIC_SR;
-  mic_cfg.magnification = 16;  // Increase gain for better sensitivity
-  mic_cfg.noise_filter_level = 0;
-  mic_cfg.use_adc = false;
-  M5.Mic.config(mic_cfg);
-
+  // EXACT same approach as m5lights_v1 - NO config() calls!
   M5.Mic.begin();
-
-  // Read back config to verify it was applied
-  auto verify_cfg = M5.Mic.config();
-  Serial.print("After - Magnification: "); Serial.println(verify_cfg.magnification);
-  Serial.print("After - Sample rate: "); Serial.println(verify_cfg.sample_rate);
-  Serial.println("================================");
-
+  M5.Mic.setSampleRate(MIC_SR);
   lastBpmMillis = millis();
+  Serial.println("Audio initialized (simple method)");
 }
 
 void detectAudioFrame() {
