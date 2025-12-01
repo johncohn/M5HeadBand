@@ -197,7 +197,7 @@ PROGMEM const uint8_t gammaTable[] = {
   230,232,235,237,240,243,245,248,251,253,255
 };
 
-inline byte gamma(byte x) {
+inline byte applyGamma(byte x) {
   return pgm_read_byte(&gammaTable[x]);
 }
 
@@ -461,9 +461,9 @@ void updatePatterns() {
     for(i = 0; i < NUM_LEDS; i++) {
       alpha = alphaMask[i] + 1;
       inv   = 257 - alpha;
-      r = gamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
-      g = gamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
-      b = gamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
+      r = applyGamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
+      g = applyGamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
+      b = applyGamma((*frontPtr++ * alpha + *backPtr++ * inv) >> 8);
       leds[i].r = r;
       leds[i].g = g;
       leds[i].b = b;
@@ -471,9 +471,9 @@ void updatePatterns() {
   } else {
     // No transition - just show back image
     for(i = 0; i < NUM_LEDS; i++) {
-      r = gamma(*backPtr++);
-      g = gamma(*backPtr++);
-      b = gamma(*backPtr++);
+      r = applyGamma(*backPtr++);
+      g = applyGamma(*backPtr++);
+      b = applyGamma(*backPtr++);
       leds[i].r = r;
       leds[i].g = g;
       leds[i].b = b;
@@ -911,8 +911,13 @@ void setup() {
   M5.Lcd.fillScreen(TFT_BLACK);
   updateDisplay();
 
-  // Initialize watchdog
-  esp_task_wdt_init(30, true);
+  // Initialize watchdog (ESP32 v3.x API)
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 30000,
+    .idle_core_mask = 0,
+    .trigger_panic = true
+  };
+  esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
 
   Serial.println("M5HeadBand Ready!");
