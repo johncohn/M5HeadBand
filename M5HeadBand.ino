@@ -510,11 +510,29 @@ void initAudio() {
 
 void detectAudioFrame() {
   static int16_t micBuf[MIC_BUF_LEN];
-  if (!M5.Mic.record(micBuf, MIC_BUF_LEN)) return;
+  static unsigned long lastDebug = 0;
+
+  if (!M5.Mic.record(micBuf, MIC_BUF_LEN)) {
+    if (millis() - lastDebug > 5000) {
+      Serial.println("WARNING: Mic.record() failed");
+      lastDebug = millis();
+    }
+    return;
+  }
 
   long sum = 0;
   for (auto &v : micBuf) sum += abs(v);
   float raw = float(sum) / MIC_BUF_LEN / 32767.0f;
+
+  // Debug output every 5 seconds
+  if (millis() - lastDebug > 5000) {
+    Serial.print("Audio raw level: ");
+    Serial.print(raw, 4);
+    Serial.print(" (");
+    Serial.print((int)(raw * 100));
+    Serial.println("%)");
+    lastDebug = millis();
+  }
 
   soundMin = min(raw, SMOOTH * soundMin + (1 - SMOOTH) * raw);
   soundMax = max(raw, SMOOTH * soundMax + (1 - SMOOTH) * raw);
@@ -971,8 +989,8 @@ void loop() {
     }
   }
 
-  // Update display periodically
-  if (now - lastDisplayUpdate > 500) {
+  // Update display periodically (less frequent to avoid tearing)
+  if (now - lastDisplayUpdate > 2000) {
     updateDisplay();
     lastDisplayUpdate = now;
   }
