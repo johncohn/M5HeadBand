@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 4  // Increment with each upload
+#define BUILD 5  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -540,7 +540,12 @@ void detectAudioFrame() {
   }
 
   long sum = 0;
-  for (auto &v : micBuf) sum += abs(v);
+  int16_t minVal = 32767, maxVal = -32768;
+  for (auto &v : micBuf) {
+    sum += abs(v);
+    if (v < minVal) minVal = v;
+    if (v > maxVal) maxVal = v;
+  }
   float raw = float(sum) / MIC_BUF_LEN / 32767.0f;
 
   // Debug output every 5 seconds
@@ -549,7 +554,12 @@ void detectAudioFrame() {
     Serial.print(raw, 4);
     Serial.print(" (");
     Serial.print((int)(raw * 100));
-    Serial.println("%)");
+    Serial.print("%) | Buffer range: ");
+    Serial.print(minVal);
+    Serial.print(" to ");
+    Serial.print(maxVal);
+    Serial.print(" | Peak-to-peak: ");
+    Serial.println(maxVal - minVal);
     lastDebug = millis();
   }
 
@@ -852,7 +862,7 @@ void updateDisplay() {
   M5.Lcd.setTextColor(TFT_WHITE, bgColor);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("M5HeadBand v%s.%d", VERSION, BUILD);
+  M5.Lcd.printf("v%s.%d", VERSION, BUILD);
 
   M5.Lcd.setCursor(10, 35);
   M5.Lcd.print("Mode: ");
