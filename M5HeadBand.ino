@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 8  // Increment with each upload
+#define BUILD 18  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -152,6 +152,9 @@ static constexpr size_t MIC_BUF_LEN = 240;
 static constexpr int MIC_SR = 44100;
 static constexpr float SMOOTH = 0.995f;
 static constexpr uint32_t BPM_WINDOW = 5000;
+
+// MOVE MIC BUFFER TO GLOBAL TO AVOID STACK OVERLAP!
+int16_t micBuf[MIC_BUF_LEN];
 
 // Button handling
 volatile bool buttonStateChanged = false;
@@ -503,15 +506,20 @@ void updatePatterns() {
 // ---------------------------------------------------------------------------
 
 void initAudio() {
-  // EXACT same approach as m5lights_v1 - NO config() calls!
   M5.Mic.begin();
   M5.Mic.setSampleRate(MIC_SR);
+
+  // Boost microphone gain to increase signal level
+  auto mic_cfg = M5.Mic.config();
+  mic_cfg.magnification = 16;  // Amplify signal 16x
+  M5.Mic.config(mic_cfg);
+
   lastBpmMillis = millis();
-  Serial.println("Audio initialized (simple method)");
+  Serial.println("Audio initialized with gain boost");
 }
 
 void detectAudioFrame() {
-  static int16_t micBuf[MIC_BUF_LEN];
+  // micBuf is now global to avoid stack overflow!
   static unsigned long lastDebug = 0;
 
   if (!M5.Mic.record(micBuf, MIC_BUF_LEN)) {
@@ -710,6 +718,22 @@ void updateAudioLevel() {
   }
 
   musicBrightness = (uint8_t)brightnessEnvelope;
+
+  // Debug brightness every 2 seconds
+  static unsigned long lastBrightnessDebug = 0;
+  if (millis() - lastBrightnessDebug > 2000) {
+    Serial.print("Brightness: audioLevel=");
+    Serial.print(audioLevel, 3);
+    Serial.print(" normalized=");
+    Serial.print(normalizedLevel, 3);
+    Serial.print(" target=");
+    Serial.print(targetBrightness, 1);
+    Serial.print(" envelope=");
+    Serial.print(brightnessEnvelope, 1);
+    Serial.print(" musicBrightness=");
+    Serial.println(musicBrightness);
+    lastBrightnessDebug = millis();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -823,45 +847,65 @@ void broadcastLEDData() {
 // ---------------------------------------------------------------------------
 
 void updateDisplay() {
-  M5.Lcd.fillScreen(TFT_BLACK);
+  uint16_t backgroundColor;
+  uint16_t textColor = WHITE;
 
-  // Set background color based on mode
-  uint16_t bgColor = TFT_GREEN;
-  const char* modeStr = "Normal";
-
+  // Check if we're following (receiving leader data)
   if (leaderDataActive && (currentMode == MODE_NORMAL || currentMode == MODE_MUSIC)) {
-    bgColor = TFT_BLUE;
-    modeStr = "Following";
+    backgroundColor = BLUE;  // Blue background when following
+    textColor = WHITE;
   } else {
-    switch(currentMode) {
-      case MODE_NORMAL:        bgColor = TFT_GREEN;  modeStr = "Normal"; break;
-      case MODE_MUSIC:         bgColor = TFT_PURPLE; modeStr = "Music"; break;
-      case MODE_NORMAL_LEADER: bgColor = TFT_ORANGE; modeStr = "Leader"; break;
-      case MODE_MUSIC_LEADER:  bgColor = TFT_RED;    modeStr = "Music Leader"; break;
+    switch (currentMode) {
+      case MODE_NORMAL:
+        backgroundColor = GREEN;
+        textColor = BLACK;
+        break;
+      case MODE_MUSIC:
+        backgroundColor = PURPLE;
+        textColor = WHITE;
+        break;
+      case MODE_NORMAL_LEADER:
+        backgroundColor = ORANGE;
+        textColor = BLACK;
+        break;
+      case MODE_MUSIC_LEADER:
+        backgroundColor = RED;
+        textColor = WHITE;
+        break;
+      default:
+        backgroundColor = BLACK;
+        break;
     }
   }
 
-  M5.Lcd.fillRect(0, 0, 240, 135, bgColor);
-  M5.Lcd.setTextColor(TFT_WHITE, bgColor);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.printf("v%s.%d", VERSION, BUILD);
+  M5.Display.fillScreen(backgroundColor);
+  M5.Display.setTextColor(textColor);
+  M5.Display.setTextSize(1);
 
-  M5.Lcd.setCursor(10, 35);
-  M5.Lcd.print("Mode: ");
-  M5.Lcd.println(modeStr);
+  M5.Display.drawString("M5HeadBand", 10, 10);
+  M5.Display.drawString("v" + String(VERSION) + "." + String(BUILD), 10, 20);
 
-  if (!leaderDataActive || currentMode == MODE_NORMAL_LEADER || currentMode == MODE_MUSIC_LEADER) {
-    M5.Lcd.setCursor(10, 60);
-    M5.Lcd.print("Pattern: ");
-    M5.Lcd.println(patternNames[fxIdx[backImgIdx]]);
+  String modeStr = "";
+  switch (currentMode) {
+    case MODE_NORMAL: modeStr = "NORMAL"; break;
+    case MODE_MUSIC: modeStr = "MUSIC"; break;
+    case MODE_NORMAL_LEADER: modeStr = "NORM LEAD"; break;
+    case MODE_MUSIC_LEADER: modeStr = "MUSIC LEAD"; break;
   }
+  M5.Display.drawString("Mode: " + modeStr, 10, 35);
 
-  if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
-    M5.Lcd.setCursor(10, 85);
-    M5.Lcd.printf("Audio: %d%%", (int)(audioLevel * 100));
-    M5.Lcd.setCursor(10, 110);
-    M5.Lcd.printf("BPM: %.0f  Beat: %s", currentBPM, audioDetected ? "YES" : "NO");
+  // Pattern info
+  if (leaderDataActive && (currentMode == MODE_NORMAL || currentMode == MODE_MUSIC)) {
+    M5.Display.drawString("Following...", 10, 50);
+  } else if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
+    String patternDisplay = String(patternNames[fxIdx[backImgIdx]]);
+    M5.Display.drawString(patternDisplay, 10, 50);
+    M5.Display.drawString("Audio: " + String((int)(audioLevel * 100)) + "%", 10, 65);
+    M5.Display.drawString("Beat: " + String(beatDetected ? "YES" : "NO"), 10, 80);
+    M5.Display.drawString("BPM: " + String((int)currentBPM), 10, 95);
+  } else {
+    String patternDisplay = String(patternNames[fxIdx[backImgIdx]]);
+    M5.Display.drawString(patternDisplay, 10, 50);
   }
 }
 
@@ -912,15 +956,14 @@ void handleButtons() {
 // ---------------------------------------------------------------------------
 
 void setup() {
-  // Initialize M5 with config (like m5lights_v1)
+  // Initialize M5StickC Plus 2
   auto cfg = M5.config();
   M5.begin(cfg);
+  M5.Display.setRotation(1);
+  M5.Display.fillScreen(BLACK);
+  M5.Display.setTextColor(WHITE);
+  M5.Display.setTextSize(1);
 
-  // Initialize display
-  M5.Lcd.setRotation(1);
-  M5.Lcd.fillScreen(TFT_BLACK);
-
-  // Initialize serial with delay (like m5lights_v1)
   Serial.begin(115200);
   delay(1000);
 
@@ -930,33 +973,33 @@ void setup() {
   Serial.println("Initializing...");
   Serial.println("================================");
 
-  // Initialize watchdog (ESP32 v3.x API)
+  // Initialize watchdog timer (30 second timeout) - match m5lights_v1
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = 30000,
-    .idle_core_mask = 0,
+    .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
     .trigger_panic = true
   };
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);
 
-  // Initialize audio BEFORE FastLED (critical!)
+  // Initialize audio
   initAudio();
   lastBrightnessUpdate = millis();
 
   // Initialize ESP-NOW
   setupESPNOW();
 
-  // Initialize FastLED (after audio)
-  FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
-    .setCorrection(TypicalLEDStrip);
+  // Initialize FastLED
+  FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(BRIGHTNESS);
-  FastLED.clear();
-  FastLED.show();
 
   // Initialize pattern system
-  randomSeed(analogRead(0));
+  randomSeed(micros());  // Use micros() instead of analogRead(0) - pin conflict!
   memset(imgData, 0, sizeof(imgData));
   fxVars[backImgIdx][0] = 1;  // Mark back image as initialized
+
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  FastLED.show();
 
   updateDisplay();
 
@@ -982,13 +1025,17 @@ void loop() {
     }
   }
 
+  // Update audio CONTINUOUSLY (not rate-limited)
+  if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
+    updateAudioLevel();
+  }
+
   // Update at 60 FPS
   if (now - lastFrameTime >= (1000 / FRAMES_PER_SECOND)) {
     lastFrameTime = now;
 
-    // Update audio in music modes
+    // Set brightness based on mode
     if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
-      updateAudioLevel();
       FastLED.setBrightness(musicBrightness);
     } else {
       FastLED.setBrightness(BRIGHTNESS);
