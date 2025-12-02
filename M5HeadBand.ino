@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 23  // Increment with each upload
+#define BUILD 36  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -66,6 +66,11 @@ void renderEffect00(byte idx);  // Solid color
 void renderEffect01(byte idx);  // Rainbow
 void renderEffect02(byte idx);  // Sine wave chase
 void renderEffect03(byte idx);  // Wavy flag
+void renderEffect04(byte idx);  // Pulse
+void renderEffect05(byte idx);  // Larson scanner
+void renderEffect07(byte idx);  // Rainbow dots
+void renderEffect08(byte idx);  // Rasta flag
+void renderEffect15(byte idx);  // Strobe ring
 
 // Alpha transition function declarations
 void renderAlpha00(void);  // Simple fade
@@ -77,7 +82,12 @@ void (*renderEffect[])(byte) = {
   renderEffect00,
   renderEffect01,
   renderEffect02,
-  renderEffect03
+  renderEffect03,
+  renderEffect04,
+  renderEffect05,
+  renderEffect07,
+  renderEffect08
+  // renderEffect15  // Strobe - disabled but code kept
 };
 
 void (*renderAlpha[])(void) = {
@@ -110,6 +120,7 @@ bool leaderDataActive = false;
 unsigned long lastLeaderMessage = 0;
 unsigned long lastCompleteFrame = 0;
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+bool patternPaused = false;  // Pattern auto-advance pause state
 
 // Audio system variables (from m5lights_v1)
 float soundMin = 1.0f;
@@ -172,7 +183,7 @@ unsigned long lastBroadcast = 0;
 
 // Pattern names for display
 const char* patternNames[] = {
-  "Solid", "Rainbow", "SineWave", "Flag"
+  "Solid", "Rainbow", "SineWave", "Flag", "Pulse", "Larson", "RainbowDots", "Rasta"
 };
 
 // ---------------------------------------------------------------------------
@@ -292,11 +303,14 @@ void renderEffect00(byte idx) {
   }
 }
 
-// Effect 1: Rainbow (1 or more full loops of color wheel)
+// Effect 1: Rainbow (variable wavelength from short 10-LED cycles to long 100-LED cycles)
 void renderEffect01(byte idx) {
   if(fxVars[idx][0] == 0) {
-    fxVars[idx][1] = (1 + random(4 * ((NUM_LEDS + 31) / 32))) * 1536;
-    fxVars[idx][2] = 4 + random(fxVars[idx][1]) / NUM_LEDS;
+    // Wavelength: from 10 LEDs (1536*10/NUM_LEDS) to 100 LEDs (1536*100/NUM_LEDS)
+    int minWave = 1536 * 10 / NUM_LEDS;
+    int maxWave = 1536 * 100 / NUM_LEDS;
+    fxVars[idx][1] = minWave + random(maxWave - minWave);
+    fxVars[idx][2] = 1 + random(2);  // Very slow speed: 1-2 units per frame
     if(random(2) == 0) fxVars[idx][1] = -fxVars[idx][1];
     if(random(2) == 0) fxVars[idx][2] = -fxVars[idx][2];
     fxVars[idx][3] = 0;
@@ -312,14 +326,15 @@ void renderEffect01(byte idx) {
   fxVars[idx][3] += fxVars[idx][2];
 }
 
-// Effect 2: Sine wave chase
+// Effect 2: Sine wave chase (very slow, smooth gradient transitions)
 void renderEffect02(byte idx) {
   if(fxVars[idx][0] == 0) {
     fxVars[idx][1] = random(1536);  // Random hue
     fxVars[idx][2] = (1 + random(4 * ((NUM_LEDS + 31) / 32))) * 720;
-    fxVars[idx][3] = 4 + random(fxVars[idx][1]) / NUM_LEDS;
+    fxVars[idx][3] = 1;  // Base speed: always 1 for smoothest movement
     if(random(2) == 0) fxVars[idx][3] = -fxVars[idx][3];
-    fxVars[idx][4] = 0;
+    fxVars[idx][4] = 0;  // Current position
+    fxVars[idx][5] = 0;  // Frame counter for even slower movement
     fxVars[idx][0] = 1;
   }
 
@@ -328,12 +343,23 @@ void renderEffect02(byte idx) {
   long color, i;
   for(i = 0; i < NUM_LEDS; i++) {
     foo = fixSin(fxVars[idx][4] + fxVars[idx][2] * i / NUM_LEDS);
-    color = (foo >= 0) ?
-       hsv2rgb(fxVars[idx][1], 254 - (foo * 2), 255) :
-       hsv2rgb(fxVars[idx][1], 255, 254 + foo * 2);
+
+    // Create smooth, simple brightness gradient
+    // Map foo (-127 to 127) to brightness (70-255) for smooth, organic flow
+    int brightness = 160 + foo; // Center at 160, range from 33-287
+    brightness = constrain(brightness, 70, 255); // Keep visible minimum
+
+    // Keep saturation constant for smoother, less jerky appearance
+    color = hsv2rgb(fxVars[idx][1], 255, brightness);
     *ptr++ = color >> 16; *ptr++ = color >> 8; *ptr++ = color;
   }
-  fxVars[idx][4] += fxVars[idx][3];
+
+  // Update position every 3 frames for very smooth, slow movement
+  fxVars[idx][5]++;
+  if (fxVars[idx][5] >= 3) {
+    fxVars[idx][4] += fxVars[idx][3];
+    fxVars[idx][5] = 0;
+  }
 }
 
 // Flag colors - can customize to your preference
@@ -346,13 +372,13 @@ PROGMEM const uint8_t flagTable[] = {
   C_WHITE, C_RED  , C_WHITE, C_RED  , C_WHITE, C_RED
 };
 
-// Effect 3: Wavy flag
+// Effect 3: Wavy flag (slower, more fluid)
 void renderEffect03(byte idx) {
   long i, sum, s, x;
   int  idx1, idx2, a, b;
   if(fxVars[idx][0] == 0) {
     fxVars[idx][1] = 720 + random(720);  // Wavyness
-    fxVars[idx][2] = 4 + random(10);     // Wave speed
+    fxVars[idx][2] = 1 + random(3);      // Wave speed (slower: 1-3)
     fxVars[idx][3] = 200 + random(200);  // Wave 'puckeryness'
     fxVars[idx][4] = 0;
     fxVars[idx][0] = 1;
@@ -380,6 +406,196 @@ void renderEffect03(byte idx) {
 
   fxVars[idx][4] += fxVars[idx][2];
   if(fxVars[idx][4] >= 720) fxVars[idx][4] -= 720;
+}
+
+// Effect 4: Pulse - solid color with breathing brightness (slower, more fluid)
+void renderEffect04(byte idx) {
+  if(fxVars[idx][0] == 0) {
+    fxVars[idx][1] = 50;  // Pulse min brightness (v)
+    fxVars[idx][2] = 250; // Pulse max brightness (v)
+    fxVars[idx][3] = random(1536); // Random hue
+    fxVars[idx][4] = fxVars[idx][1]; // Current brightness
+    fxVars[idx][5] = 1; // Direction: 0=down, 1=up
+    fxVars[idx][6] = 1 + random(3); // Step value (slower: 1-3)
+    fxVars[idx][0] = 1; // Effect initialized
+  }
+
+  byte *ptr = &imgData[idx][0];
+  long color, i;
+  for(i = 0; i < NUM_LEDS; i++) {
+    color = hsv2rgb(fxVars[idx][3], 255, fxVars[idx][4]);
+    *ptr++ = color >> 16; *ptr++ = color >> 8; *ptr++ = color;
+  }
+
+  // Update brightness
+  if (fxVars[idx][5] == 0) {
+    fxVars[idx][4] -= fxVars[idx][6];
+    if (fxVars[idx][4] <= fxVars[idx][1]) {
+      fxVars[idx][5] = 1;
+      fxVars[idx][4] = fxVars[idx][1];
+    }
+  } else {
+    fxVars[idx][4] += fxVars[idx][6];
+    if (fxVars[idx][4] >= fxVars[idx][2]) {
+      fxVars[idx][5] = 0;
+      fxVars[idx][4] = fxVars[idx][2];
+    }
+  }
+}
+
+// Effect 5: Larson scanner with smooth fade at edges and complementary background
+void renderEffect05(byte idx) {
+  if(fxVars[idx][0] == 0) {
+    fxVars[idx][1] = random(1536); // Random hue for 'Eye'
+    fxVars[idx][2] = (fxVars[idx][1] >= 768) ?  // Background hue is 180 degrees opposite
+      (fxVars[idx][1] - 768) : (fxVars[idx][1] + 768);
+    fxVars[idx][3] = 1 + random(3);  // Eye speed (very slow: 1-3)
+    fxVars[idx][4] = 0; // Current position
+    fxVars[idx][5] = 40; // Fade threshold (larger = wider, smoother eye)
+    fxVars[idx][0] = 1; // Effect initialized
+  }
+
+  byte *ptr = &imgData[idx][0];
+  int foo;
+  long color, i;
+  for(i = 0; i < NUM_LEDS; i++) {
+    foo = fixCos(fxVars[idx][4] + 720 * i / NUM_LEDS);
+
+    // Create smooth gradient from background to eye
+    // foo ranges from -127 to 127, with 127 being the peak
+    if (foo >= (127 - fxVars[idx][5])) {
+      // In the eye region - create smooth brightness gradient
+      int eyeIntensity = ((foo - (127 - fxVars[idx][5])) * 255) / fxVars[idx][5];
+      eyeIntensity = constrain(eyeIntensity, 0, 255);
+
+      // Blend from background to eye color based on intensity
+      long eyeColor = hsv2rgb(fxVars[idx][1], 255, 255);
+      long bgColor = hsv2rgb(fxVars[idx][2], 255, 100);
+
+      // Linear blend
+      int r = (((eyeColor >> 16) & 0xFF) * eyeIntensity + ((bgColor >> 16) & 0xFF) * (255 - eyeIntensity)) / 255;
+      int g = (((eyeColor >> 8) & 0xFF) * eyeIntensity + ((bgColor >> 8) & 0xFF) * (255 - eyeIntensity)) / 255;
+      int b = ((eyeColor & 0xFF) * eyeIntensity + (bgColor & 0xFF) * (255 - eyeIntensity)) / 255;
+
+      color = ((long)r << 16) | ((long)g << 8) | b;
+    } else {
+      color = hsv2rgb(fxVars[idx][2], 255, 100);
+    }
+    *ptr++ = color >> 16; *ptr++ = color >> 8; *ptr++ = color;
+  }
+  fxVars[idx][4] += fxVars[idx][3];
+
+  // Flip direction at ends
+  if (fxVars[idx][4] <= 0 || fxVars[idx][4] >= 720) {
+    fxVars[idx][3] = -fxVars[idx][3];
+  }
+}
+
+// Effect 7: Rainbow dots on black (always moving, min 6 LED dots, with long smooth fade tails)
+void renderEffect07(byte idx) {
+  if(fxVars[idx][0] == 0) {
+    fxVars[idx][1] = 0;
+    fxVars[idx][2] = 10 + random(20); // Interval between dots
+    fxVars[idx][3] = 1;  // Dot speed (always 1, always moving)
+    fxVars[idx][4] = 0; // Current position
+    fxVars[idx][5] = 8 + random(8); // Dot size (8-15 LEDs, larger core for longer tails)
+    fxVars[idx][6] = 0; // Frame counter for slower movement
+    fxVars[idx][0] = 1; // Effect initialized
+  }
+
+  byte *ptr = &imgData[idx][0];
+  long color, i;
+  int fadeEdge = 6; // Longer fade: 6 LEDs at each edge for smoother, longer tails
+
+  for(i = 0; i < NUM_LEDS; i++) {
+    int posInDot = (i + fxVars[idx][4]) % fxVars[idx][2];
+    int hue = ((((i + fxVars[idx][4]) / fxVars[idx][2]) * 256) % 1536);
+
+    if (posInDot <= fxVars[idx][5]) {
+      // Inside dot - calculate brightness with smooth fade at edges
+      int brightness = 255;
+
+      // Fade in at leading edge (longer tail)
+      if (posInDot < fadeEdge) {
+        brightness = (posInDot * 255) / fadeEdge;
+      }
+      // Fade out at trailing edge (longer tail)
+      else if (posInDot > fxVars[idx][5] - fadeEdge) {
+        int distFromEnd = fxVars[idx][5] - posInDot;
+        brightness = (distFromEnd * 255) / fadeEdge;
+      }
+
+      color = hsv2rgb(hue, 255, brightness);
+    } else {
+      color = 0; // Black
+    }
+    *ptr++ = color >> 16; *ptr++ = color >> 8; *ptr++ = color;
+  }
+  // Update position every 5 frames for slower, fluid movement
+  fxVars[idx][6]++;
+  if (fxVars[idx][6] >= 5) {
+    fxVars[idx][4] += fxVars[idx][3];
+    fxVars[idx][6] = 0;
+  }
+}
+
+// Rasta flag color table
+PROGMEM const uint8_t rastaTable[] = {
+  0, 255, 0,  255, 255, 0,  255, 0, 0,  0, 255, 0,  255, 255, 0,  255, 0, 0,  0, 255, 0,
+  255, 255, 0,  255, 0, 0,  0, 255, 0,  255, 255, 0,  255, 0, 0,  0, 255, 0,  255, 255, 0,
+  255, 0, 0,  0, 255, 0,  255, 255, 0,  255, 0, 0,  0, 255, 0,  255, 255, 0,  255, 0, 0
+};
+
+// Effect 8: Rasta flag (wavy green/yellow/red, slower and more fluid)
+void renderEffect08(byte idx) {
+  long i, sum, s, x;
+  int idx1, idx2, a, b;
+  if(fxVars[idx][0] == 0) {
+    fxVars[idx][1] = 720 + random(720); // Wavyness
+    fxVars[idx][2] = 1 + random(3);     // Wave speed (slower: 1-3)
+    fxVars[idx][3] = 200 + random(200); // Wave 'puckeryness'
+    fxVars[idx][4] = 0;                 // Current position
+    fxVars[idx][0] = 1;                 // Effect initialized
+  }
+
+  for(sum = 0, i = 0; i < NUM_LEDS - 1; i++) {
+    sum += fxVars[idx][3] + fixCos(fxVars[idx][4] + fxVars[idx][1] * i / NUM_LEDS);
+  }
+
+  byte *ptr = &imgData[idx][0];
+  for(s = 0, i = 0; i < NUM_LEDS; i++) {
+    x = 256L * ((sizeof(rastaTable) / 3) - 1) * s / sum;
+    idx1 = (x >> 8) * 3;
+    idx2 = ((x >> 8) + 1) * 3;
+    b = (x & 255) + 1;
+    a = 257 - b;
+    *ptr++ = ((pgm_read_byte(&rastaTable[idx1]) * a) +
+              (pgm_read_byte(&rastaTable[idx2]) * b)) >> 8;
+    *ptr++ = ((pgm_read_byte(&rastaTable[idx1 + 1]) * a) +
+              (pgm_read_byte(&rastaTable[idx2 + 1]) * b)) >> 8;
+    *ptr++ = ((pgm_read_byte(&rastaTable[idx1 + 2]) * a) +
+              (pgm_read_byte(&rastaTable[idx2 + 2]) * b)) >> 8;
+    s += fxVars[idx][3] + fixCos(fxVars[idx][4] + fxVars[idx][1] * i / NUM_LEDS);
+  }
+
+  fxVars[idx][4] += fxVars[idx][2];
+  if(fxVars[idx][4] >= 720) fxVars[idx][4] -= 720;
+}
+
+// Effect 15: Strobe whole ring - random color flashes
+void renderEffect15(byte idx) {
+  byte *ptr = &imgData[idx][0];
+  byte r, g, b;
+
+  if(fxVars[idx][0] == 0) {
+    fxVars[idx][0] = 1; // Effect initialized
+  }
+
+  // New random color every frame
+  r = random(256); g = random(256); b = random(256);
+  for(int i = 0; i < NUM_LEDS; i++) {
+    *ptr++ = r; *ptr++ = g; *ptr++ = b;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -485,19 +701,42 @@ void updatePatterns() {
   }
 
   // Count up to next transition
-  tCounter++;
+  // When paused: allow transitions to complete (tCounter >= 0) but freeze during hold phase (tCounter < 0)
+  // When not paused: always increment (normal auto-advance)
+  if (!patternPaused || tCounter >= 0) {
+    tCounter++;
+  }
+
   if(tCounter == 0) {
     // Transition start
-    fxIdx[frontImgIdx] = random(sizeof(renderEffect) / sizeof(renderEffect[0]));
+    if (patternPaused) {
+      // Manual mode: sequential pattern selection
+      int numPatterns = sizeof(renderEffect) / sizeof(renderEffect[0]);
+      fxIdx[frontImgIdx] = (fxIdx[backImgIdx] + 1) % numPatterns;
+      Serial.print("Manual advance to pattern: ");
+      Serial.println(fxIdx[frontImgIdx]);
+    } else {
+      // Auto mode: random pattern selection
+      fxIdx[frontImgIdx] = random(sizeof(renderEffect) / sizeof(renderEffect[0]));
+    }
     fxIdx[2]           = random(sizeof(renderAlpha)  / sizeof(renderAlpha[0]));
     transitionTime     = random(30, 181);  // 0.5 to 3 second transitions at 60 FPS
     fxVars[frontImgIdx][0] = 0;
     fxVars[2][0]           = 0;
   } else if(tCounter >= transitionTime) {
     // End transition
+    // Debug output for manual mode
+    if (patternPaused) {
+      Serial.print("Transition complete - new pattern: ");
+      Serial.println(patternNames[fxIdx[frontImgIdx]]);  // Print BEFORE swap
+    }
     fxIdx[backImgIdx] = fxIdx[frontImgIdx];
     backImgIdx        = 1 - backImgIdx;
     tCounter          = -120 - random(240);  // Hold 2-6 seconds at 60 FPS
+    // Update display AFTER swap so it shows correct pattern
+    if (patternPaused) {
+      updateDisplay();
+    }
   }
 }
 
@@ -922,12 +1161,14 @@ void updateDisplay() {
     M5.Display.drawString("Following...", 10, 50);
   } else if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
     String patternDisplay = String(patternNames[fxIdx[backImgIdx]]);
+    if (patternPaused) patternDisplay += " [PAUSED]";
     M5.Display.drawString(patternDisplay, 10, 50);
     M5.Display.drawString("Audio: " + String((int)(audioLevel * 100)) + "%", 10, 65);
     M5.Display.drawString("Beat: " + String(beatDetected ? "YES" : "NO"), 10, 80);
     M5.Display.drawString("BPM: " + String((int)currentBPM), 10, 95);
   } else {
     String patternDisplay = String(patternNames[fxIdx[backImgIdx]]);
+    if (patternPaused) patternDisplay += " [PAUSED]";
     M5.Display.drawString(patternDisplay, 10, 50);
   }
 }
@@ -979,10 +1220,54 @@ void handleButtons() {
     updateDisplay();
   }
 
-  // Button B: Manual pattern advance (disabled in follow mode)
-  if (M5.BtnB.wasPressed() && !leaderDataActive) {
-    // Trigger immediate transition
-    if (tCounter < 0) tCounter = 0;
+  // Button B: Pattern control (disabled in follow mode)
+  if (!leaderDataActive) {
+    if (M5.BtnB.wasPressed()) {
+      Serial.println("BTN B PRESSED");
+      btnBPressed = millis();
+      btnBHandled = false;
+    }
+
+    if (M5.BtnB.isPressed() && !btnBHandled) {
+      if (millis() - btnBPressed >= LONG_PRESS_TIME_MS) {
+        // Long press: Toggle pattern pause/unpause
+        Serial.println("BTN B LONG PRESS DETECTED");
+        patternPaused = !patternPaused;
+        btnBHandled = true;
+        Serial.println(patternPaused ? ">>> PATTERNS PAUSED <<<" : ">>> PATTERNS AUTO-ADVANCING <<<");
+        updateDisplay();
+      }
+    }
+
+    if (M5.BtnB.wasReleased() && !btnBHandled) {
+      Serial.println("BTN B RELEASED");
+      // Short press: Manually advance pattern
+      if (patternPaused) {
+        // Manual mode: instant pattern switching, no transition
+        int numPatterns = sizeof(renderEffect) / sizeof(renderEffect[0]);
+        int newPattern = (fxIdx[backImgIdx] + 1) % numPatterns;
+
+        // Set both buffers to new pattern for instant switch
+        fxIdx[0] = newPattern;
+        fxIdx[1] = newPattern;
+
+        // Reset to hold phase
+        tCounter = -120 - random(240);
+
+        // Initialize new pattern
+        fxVars[0][0] = 0;
+        fxVars[1][0] = 0;
+
+        Serial.print("Instant switch to pattern: ");
+        Serial.println(patternNames[newPattern]);
+
+        updateDisplay();
+      } else if (tCounter < 0) {
+        // When not paused, allow quick advance during hold phase
+        tCounter = 0;
+        Serial.println("Pattern advance");
+      }
+    }
   }
 }
 
