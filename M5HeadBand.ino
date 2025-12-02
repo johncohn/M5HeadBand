@@ -35,7 +35,7 @@ FASTLED_USING_NAMESPACE
 
 // Version info
 #define VERSION "1.0.0"
-#define BUILD 18  // Increment with each upload
+#define BUILD 23  // Increment with each upload
 
 // Hardware config
 #define LED_PIN 32
@@ -669,14 +669,20 @@ void updateBPM() {
     bool beatsDetected = (cnt >= 2 && currentBPM >= 30.0f && currentBPM <= 300.0f);
     bool sustainBeats = (cnt >= 1 && currentBPM >= 30.0f && currentBPM <= 300.0f);
 
+    bool prevAudioDetected = audioDetected;
     if (beatsDetected || sustainBeats) {
       lastMusicDetectedTime = now;
       audioDetected = true;
     } else {
-      if (now - lastMusicDetectedTime > 20000) {
+      if (now - lastMusicDetectedTime > 3000) {  // 3 second timeout instead of 20
         audioDetected = false;
         currentBPM = 0.0f;
       }
+    }
+
+    // Debug when audio detection state changes
+    if (audioDetected != prevAudioDetected) {
+      Serial.println(audioDetected ? ">>> MUSIC DETECTED - reactive mode <<<" : ">>> NO MUSIC - pattern mode <<<");
     }
 
     lastBpmMillis += BPM_WINDOW;
@@ -688,22 +694,39 @@ void updateAudioLevel() {
   detectAudioFrame();
   updateBPM();
 
-  noiseFloor = noiseFloor * noiseFloorSmooth + audioLevel * (1.0f - noiseFloorSmooth);
-  peakLevel = peakLevel * peakLevelSmooth + audioLevel * (1.0f - peakLevelSmooth);
+  // Adaptive noise floor: track minimum (fast drop, slow rise)
+  if (audioLevel < noiseFloor) {
+    noiseFloor = audioLevel;  // Instant attack downward to capture quiet moments
+  } else {
+    noiseFloor = noiseFloor * 0.9999f + 0.00001f;  // Very slow drift upward, don't blend toward audioLevel
+  }
 
+  // Adaptive peak level: track maximum (fast rise, slow drop)
+  if (audioLevel > peakLevel) {
+    peakLevel = audioLevel;  // Instant attack upward to capture loud moments
+  } else {
+    peakLevel = peakLevel * 0.9999f;  // Very slow decay downward, don't blend toward audioLevel
+  }
+
+  // Enforce minimum range to prevent convergence
   float range = peakLevel - noiseFloor;
-  if (range < 0.01f) range = 0.01f;
+  if (range < 0.3f) {
+    // Force them apart to maintain dynamic range
+    float center = (peakLevel + noiseFloor) / 2.0f;
+    noiseFloor = center - 0.15f;
+    peakLevel = center + 0.15f;
+  }
 
   float normalizedLevel = (audioLevel - noiseFloor) / range;
   normalizedLevel = constrain(normalizedLevel, 0.0f, 1.0f);
 
   float targetBrightness;
   if (normalizedLevel < BRIGHTNESS_THRESHOLD) {
-    targetBrightness = 1.0f;
+    targetBrightness = 0.0f;  // Allow full darkness on downbeats
   } else {
     float scaledLevel = (normalizedLevel - BRIGHTNESS_THRESHOLD) / (1.0f - BRIGHTNESS_THRESHOLD);
     float curved = pow(scaledLevel, BRIGHTNESS_POWER_CURVE);
-    targetBrightness = 1.0f + (curved * 24.0f);
+    targetBrightness = curved * 25.0f;  // Range: 0-25
   }
 
   unsigned long now = millis();
@@ -937,9 +960,21 @@ void handleButtons() {
 
   if (M5.BtnA.wasReleased() && !btnAHandled) {
     // Short press: Toggle Normal/Music
-    if (currentMode == MODE_NORMAL) currentMode = MODE_MUSIC;
+    if (currentMode == MODE_NORMAL) {
+      currentMode = MODE_MUSIC;
+      // Reset adaptive tracking for fresh start
+      noiseFloor = 0.01f;
+      peakLevel = 0.1f;
+      brightnessEnvelope = BRIGHTNESS;
+    }
     else if (currentMode == MODE_MUSIC) currentMode = MODE_NORMAL;
-    else if (currentMode == MODE_NORMAL_LEADER) currentMode = MODE_MUSIC_LEADER;
+    else if (currentMode == MODE_NORMAL_LEADER) {
+      currentMode = MODE_MUSIC_LEADER;
+      // Reset adaptive tracking for fresh start
+      noiseFloor = 0.01f;
+      peakLevel = 0.1f;
+      brightnessEnvelope = BRIGHTNESS;
+    }
     else if (currentMode == MODE_MUSIC_LEADER) currentMode = MODE_NORMAL_LEADER;
     updateDisplay();
   }
@@ -1034,9 +1069,14 @@ void loop() {
   if (now - lastFrameTime >= (1000 / FRAMES_PER_SECOND)) {
     lastFrameTime = now;
 
-    // Set brightness based on mode
+    // Set brightness based on mode and audio detection
     if (currentMode == MODE_MUSIC || currentMode == MODE_MUSIC_LEADER) {
-      FastLED.setBrightness(musicBrightness);
+      // In music mode: use music brightness if audio detected, otherwise use normal brightness
+      if (audioDetected) {
+        FastLED.setBrightness(musicBrightness);
+      } else {
+        FastLED.setBrightness(BRIGHTNESS);  // Fall back to normal patterns when no music
+      }
     } else {
       FastLED.setBrightness(BRIGHTNESS);
     }
